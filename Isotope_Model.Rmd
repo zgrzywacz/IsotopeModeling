@@ -27,9 +27,13 @@ Then look at seasonal. Calc Oct-Feb on monthly marshall sam data. Create a facto
 After that, maybe adjust seasonal part to match what I did with SAM data
 
 
+
+
+
 ```{r}
 library(ncdf4)
 library(raster)
+library(dplyr)
 library(lubridate)
 library(ggplot2)
 library(lattice)
@@ -38,6 +42,7 @@ library(rnaturalearthdata)
 library(rasterVis)
 library(viridis)
 library(seas)
+library(rgeos)
 ```
 
 ### Data Download from ECHAM5‐wiso (monthly, 1 degree grid)
@@ -169,6 +174,21 @@ spN <- row.names(samY[samY$ANN < (quantile(samY$ANN, 0.1)),]) #bottom 10% annual
 spP <- row.names(samY[samY$ANN > (quantile(samY$ANN, 0.9)),]) #top 10% annual SAM
 ```
 
+Read in Monthly Marshall SAM data 
+```{r}
+sam_M <- read.table("data/marshallSamMon.txt")
+```
+
+Make into growing season years
+```{r}
+
+m <- lapply(sam_M, fun=mean, na.rm = TRUE)
+
+```
+
+```{r}
+
+```
 
 
 Although - SAM seasons - which year?
