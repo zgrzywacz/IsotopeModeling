@@ -43,6 +43,9 @@ library(seas)
 ### Data Download from ECHAM5‐wiso (monthly, 1 degree grid)
 https://zenodo.org/record/1249604#.XpnVbFNKhTZ
 
+Add this to the data folder but DO NOT COMMIT BEFORE REMOVING THIS FILE!!!
+It is too large to push to github, and it will be impossible to make any more pushes afterwards
+
 Data sources, years, extent (could be variables in function call someday)
 ```{r}
 netcdf.file <- "data/d18O_precip_mon_1871_2011.nc"
