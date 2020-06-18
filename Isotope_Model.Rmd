@@ -1,0 +1,249 @@
+---
+title: "Isotope_Model"
+author: "Amy Hessl"
+date: "4/17/2020"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Learn exactly what ECHAM is
+Read proxy-system model paper (Evans, Kevin, etc)
+Schmidt
+PRYSM paper
+Steiger
+Report back on that 
+
+netcdf tutorials from Oregon (some functions are named different)
+metadata is part of the data
+
+Steps:
+Go through
+Do percentiles/quantiles
+Then look at seasonal. Calc Oct-Feb on monthly marshall sam data. Create a factor - then use apply
+After that, maybe adjust seasonal part to match what I did with SAM data
+
+
+```{r}
+library(ncdf4)
+library(raster)
+library(lubridate)
+library(ggplot2)
+library(lattice)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(rasterVis)
+library(viridis)
+library(seas)
+```
+
+### Data Download from ECHAM5‐wiso (monthly, 1 degree grid)
+https://zenodo.org/record/1249604#.XpnVbFNKhTZ
+
+Data sources, years, extent (could be variables in function call someday)
+```{r}
+netcdf.file <- "data/d18O_precip_mon_1871_2011.nc"
+
+F_yr <- 1958
+L_yr <- 2011
+years <- seq(F_yr, L_yr)
+ext <- extent(143.5, 148.6, -43.8, -39.5) #tas extent (lon_min, lon_max, lat_min, lat_max)
+#ext <- extent(0, 180, -90, 0) #SH extent
+```
+
+Get a list of the variables to choose from and confirm that the time 
+origin and units are appropriate......
+```{r}
+nc <- ncdf4::nc_open(netcdf.file)
+
+#select the variable
+var.name <- names(nc[['var']])[1] #be sure this is the value you want
+
+summary(nc$dim$lon$vals) #if longitude is 0-360 needs to be rotated
+tunits <- ncdf4::ncatt_get(nc, "time", "units")
+print(tunits)
+
+ncdf4::nc_close(nc)
+```
+
+Rotate because the extent is 0-360 not 0-180 (takes a while)
+```{r}
+dat <- rotate(brick(netcdf.file, varname= var.name))
+```
+
+Crop to spatial extent for faster processessing
+```{r}
+datC <- crop(dat, ext)
+```
+
+### Extract Data for x,y point and format using function extract_xy
+Cape Grim: 144.689, -40.683 
+Mt Read: 145.527, -41.837 
+Cradle Mountain: 145.944, -41.637 
+```{r}
+# Extracts data from raster stack at an x,y location and writes a file for use later named by sitename.
+extract_xy <- function(x, y, clim.raster, sitename){
+    xy_pt <-	cbind(x, y)
+    clim.raster_e <- extract(clim.raster, xy_pt, df = TRUE)
+    xy_data <- data.frame(t(clim.raster_e)[-1,])
+    colnames(xy_data) <- "O18"
+    yr_mo_dy <- substr(row.names(xy_data), 2, 11)
+    d <- as.Date(gsub(".", '/', yr_mo_dy, fixed = T))
+    xy_data$Date <- d
+    xy_data <- xy_data[c("Date", "O18")]
+    write.csv(xy_data, paste0("data/", sitename, "_wiso.csv"), row.names=FALSE)
+    return(xy_data)
+}
+
+wiso_cg <- extract_xy(144.689, -40.683, datC, "CapeGrim")
+wiso_mr <- extract_xy(145.527, -41.837, datC, "MtRead")
+```
+
+```{r}
+plot(wiso_cg$Date, wiso_cg$O18, type="l")
+
+```
+
+### Bring in Cape Grim GNIP Data
+```{r read grim data}
+cg_dat <- read.csv("data/wiser_gnip-monthly-au-gnipmau01.csv", header=T)[,c("Date", "O18")]
+```
+
+```{r}
+date_rnge <- range(as.Date(cg_dat$Date))
+dates <- as.Date(cg_dat$Date)
+wiso_cg_sub <- wiso_cg[as.Date(wiso_cg$Date) %in% dates,]
+wiso_mr_sub <- wiso_mr[as.Date(wiso_mr$Date) %in% dates,]
+  
+sum.tble <- rbind(summary(wiso_cg_sub$O18)[c(1:6)], summary(wiso_mr_sub$O18)[c(1:6)], summary(cg_dat$O18)[c(1:6)])
+row.names(sum.tble) <- c("d18O_wiso_cg", "d18O_wiso_mr", "d18O_CapeGrim")
+print(sum.tble)
+```
+
+Graph wiso and capegrim
+```{r}
+
+#gather into single dataframe to allow better plotting
+#cg_dat, wiso_cg_sub, wiso_mr_sub, 
+
+
+ggplot() + 
+  geom_line(data = wiso_cg_sub, aes(x = as.Date(Date), y = O18), color = "#00AFBB") + #teal
+  geom_line(data = wiso_mr_sub, aes(x = as.Date(Date), y = O18), color = "#FC4E07") + #orange
+  geom_line(data = cg_dat, aes(x = as.Date(Date), y = O18), color = "#E7B800") + #yellow
+  labs(x='Date',
+  y='d18O', 
+  color = "Legend") +
+    scale_color_manual(values = colors)
+
+
+```
+
+### Composite Analysis on SAM
+Extract Particular Years/Months from datC (climate raster brick)
+Create three raster bricks:
+datY - a raster brick of all the years and months in the analysis period (set by _years_ variable above).
+datSP - a raster brick of the top 10 positive SAM years during the analysis period.
+datSN - a raster brick of the top 10 negative SAM years during the analysis period.
+
+datY
+```{r}
+sel_y <- names(datC)[substr(names(datC), 2, 5) %in% years] 
+#use that index to subset the raster brick
+datY <- subset(datC, sel_y, value=T)
+tail(names(datY), 30) 
+```
+
+
+Read in Marshall SAM data and subset to period, extract 90th percentile highest/lowest
+```{r}
+sam <- read.table("data/marshallSamAnn.txt")
+samY <- sam[row.names(sam) %in% years, ]
+spN <- row.names(samY[samY$ANN < (quantile(samY$ANN, 0.1)),]) #bottom 10% annual SAM
+spP <- row.names(samY[samY$ANN > (quantile(samY$ANN, 0.9)),]) #top 10% annual SAM
+```
+
+
+
+Although - SAM seasons - which year?
+### Better to look at the growing season, rather than calendar year
+First create a factor for growth.years where growth.year begins in Oct previous year and runs through Sept of same year.
+Adjust if you just want Oct thru Feb
+mkann (in the seas package) not necessarily needed
+Need an index/factor that takes all layers (Z) and applies a conversion to say what year the month needs to be applied to (Oct 2015 -> 2016 or other way around). Can probably create this sequence on my own
+```{r}
+st.mon <- "10"  
+yr_mo_dy <- substr(names(datY), 2, 11)
+d <- as.Date(gsub(".", '/', yr_mo_dy, fixed = T)) 
+start <- paste0(min(substr(names(datY), 2, 5)),"-", st.mon, "-15")
+grow.years <- mkann(d, as.Date(start)) #an index of the growing season years.  note first and last are incomplete as is last year.
+```
+
+use this factor to create means by growth.year
+```{r}
+ s <- stackApply(datY, indices=grow.years, fun=mean, na.rm=TRUE) #adjust names of layers to match spN
+```
+
+
+#####NEEDS UPDATE FROM HERE TO MATCH s 
+datSN - negative SAM years only
+```{r}
+sel_spN <- names(datY)[substr(names(datY), 2, 5) %in% spN] 
+#use that index to subset the raster brick
+datSN <- subset(datY, sel_spN, value=T)
+tail(names(datSN), 30) 
+dim(datSN) #should have 120 layers
+```
+
+datSP - positive SAM years only
+```{r}
+sel_spP <- names(datY)[substr(names(datY), 2, 5) %in% spP] 
+#use that index to subset the raster brick
+datSP <- subset(datC, sel_spP, value=T)
+tail(names(datSP), 30) 
+dim(datSP) #should have 120 layers
+```
+
+### Calculate a composite (subtract the datSP from the mean conditions datY)
+Climatological mean:
+```{r}
+datM <- calc(datY, mean)
+```
+Mean of positive SAM years
+```{r}
+datSP.mean <- calc(datSP, mean)
+```
+Mean of negative SAM years
+```{r}
+datSN.mean <- calc(datSN, mean)
+```
+
+Calculate the anomaly = Observed Value - Mean Value
+Alternates?: raster, calc, stackapply
+Calc more efficient over whole data
+stackapply if you only use some of the layers, pass a factor through the calculation
+```{r}
+P.anom <- datSP.mean - datM
+N.anom <- datSN.mean - datM
+```
+Next steps: bootstrapping
+
+Combine the two layers into a brick for easier plotting using levelplot
+```{r}
+anom.list <- list(P.anom, N.anom) 
+anom.brick <- raster::brick(anom.list)
+names(anom.brick) <- c("P.anom", "N.anom")
+```
+
+Plot
+```{r}
+coasts <- ne_coastline(scale=50, "sp")
+coasts <- crop(coasts, ext)
+levelplot(anom.brick, colorkey=list(title="Pos, Neg Anom", space="bottom"), margin=TRUE, 
+          names.attr=names(anom.brick),     par.settings=rasterTheme(viridis_pal(option = "D")(255))) + 
+   layer(sp.polygons(coasts, lwd=1)) 
+```
+
